@@ -1,0 +1,171 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Witold Kaminski
+
+//! # Module: Slice Reference Iterator
+//!
+//! ## Core Responsibility
+//! This module implements ultra-high performance iterators for borrowing windows/slices of a
+//! specified width from a given slice. It wraps pointer iterators directly to eliminate
+//! logical branch duplication and maximize LLVM register pinning.
+
+use crate::slice_ptr_iterator::{SlicePtrIterator, SliceMutPtrIterator};
+use std::marker::PhantomData;
+use std::iter::FusedIterator;
+
+/// An immutable iterator that yields references to slice windows.
+///
+/// # Example
+/// ```rust
+/// struct MockRunner;
+/// impl MockRunner {
+///     fn run() {
+///         extern crate lineariterator as my_crate;
+///         use my_crate::slice_ref_iterator::SliceRefIterator;
+///
+///         let data = [10, 20, 30, 40, 50];
+///         let mut iter = SliceRefIterator::new(&data, 2);
+///
+///         assert_eq!(iter.next().unwrap(), &[10, 20]);
+///         assert_eq!(iter.next().unwrap(), &[20, 30]);
+///         assert_eq!(iter.next().unwrap(), &[30, 40]);
+///         assert_eq!(iter.next().unwrap(), &[40, 50]);
+///         assert!(iter.next().is_none());
+///     }
+/// }
+/// MockRunner::run();
+/// ```
+pub struct SliceRefIterator<'a, T> {
+    inner: SlicePtrIterator<'a, T>,
+    _marker: PhantomData<&'a [T]>,
+}
+
+unsafe impl<'a, T: Sync> Send for SliceRefIterator<'a, T> {}
+
+unsafe impl<'a, T: Sync> Sync for SliceRefIterator<'a, T> {}
+
+/// A mutable window iterator over a slice.
+///
+/// # Safety Warning
+/// Because this iterator can yield overlapping mutable windows when the step stride is smaller
+/// than the window width, consumers **must never** hold onto multiple returned mutable references
+/// at the same time. Each yielded element must go out of scope before `.next()` is called again.
+///
+/// # Example
+/// ```rust
+/// struct MockRunner;
+/// impl MockRunner {
+///     fn run() {
+///         extern crate lineariterator as my_crate;
+///         use my_crate::slice_ref_iterator::SliceMutRefIterator;
+///
+///         let mut data = [10, 20, 30, 40];
+///         let mut iter = SliceMutRefIterator::new(&mut data, 2);
+///
+///         let w1 = iter.next().unwrap();
+///         w1[0] = 99;
+///
+///         assert_eq!(data, [99, 20, 30, 40]);
+///     }
+/// }
+/// MockRunner::run();
+/// ```
+pub struct SliceMutRefIterator<'a, T> {
+    inner: SliceMutPtrIterator<'a, T>,
+    _marker: PhantomData<&'a mut [T]>,
+}
+
+unsafe impl<'a, T: Send> Send for SliceMutRefIterator<'a, T> {}
+unsafe impl<'a, T: Sync> Sync for SliceMutRefIterator<'a, T> {}
+
+impl<'a, T> SliceRefIterator<'a, T> {
+    /// Creates a new immutable window iterator over a slice with a default step size of `1`.
+    #[inline(always)]
+    pub fn new(slice: &'a [T], width: usize) -> Self {
+        Self::new_step(slice, width, 1)
+    }
+
+    /// Creates a new immutable window iterator over a slice with a custom step size.
+    #[inline(always)]
+    pub fn new_step(slice: &'a [T], width: usize, step: usize) -> Self {
+        Self {
+            // Safety: The raw pointer from the slice is valid, aligned, and initialized for its length.
+            inner: unsafe { SlicePtrIterator::new_step(slice.as_ptr(), width, slice.len(), step) },
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<'a, T> Iterator for SliceRefIterator<'a, T> {
+    type Item = &'a [T];
+
+    #[inline(always)]
+    fn next(&mut self) -> Option<Self::Item> {
+        let ptr_item = self.inner.next()?;
+        // Hard-Optimization: Hint to LLVM that the underlying pointer is guaranteed
+        // to be valid and properly aligned when the loop size hint is non-zero.
+        unsafe {
+            core::hint::assert_unchecked(!ptr_item.is_null());
+            Some(&*ptr_item)
+        }
+    }
+
+    #[inline(always)]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+
+    #[inline(always)]
+    fn count(self) -> usize {
+        self.inner.size_hint().0
+    }
+}
+
+impl<'a, T> ExactSizeIterator for SliceRefIterator<'a, T> {}
+impl<'a, T> FusedIterator for SliceRefIterator<'a, T> {}
+
+
+impl<'a, T> SliceMutRefIterator<'a, T> {
+    /// Creates a new mutable window iterator over a slice with a default step size of `1`.
+    #[inline(always)]
+    pub fn new(slice: &'a mut [T], width: usize) -> Self {
+        Self::new_step(slice, width, 1)
+    }
+
+    /// Creates a new mutable window iterator over a slice with a custom step size.
+    #[inline(always)]
+    pub fn new_step(slice: &'a mut [T], width: usize, step: usize) -> Self {
+        Self {
+            // Safety: The mutable pointer from the slice is valid and uniquely un-aliased.
+            inner: unsafe { SliceMutPtrIterator::new_step(slice.as_mut_ptr(), width, slice.len(), step) },
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<'a, T> Iterator for SliceMutRefIterator<'a, T> {
+    type Item = &'a mut [T];
+
+    #[inline(always)]
+    fn next(&mut self) -> Option<Self::Item> {
+        let ptr_item = self.inner.next()?;
+        // Hard-Optimization: Bypass safety boundary unwrap re-checks inside hot assembly loops.
+        unsafe {
+            core::hint::assert_unchecked(!ptr_item.is_null());
+            Some(&mut *ptr_item)
+        }
+    }
+
+    #[inline(always)]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+
+    #[inline(always)]
+    fn count(self) -> usize {
+        self.inner.size_hint().0
+    }
+}
+
+impl<'a, T> ExactSizeIterator for SliceMutRefIterator<'a, T> {}
+impl<'a, T> FusedIterator for SliceMutRefIterator<'a, T> {}
+
