@@ -55,3 +55,6 @@ cover:
     grcov . --binary-path ./target/debug/deps/ -s . -t html --branch --ignore-not-existing --ignore '../*' --ignore "/*" -o target/coverage/html
     firefox target/coverage/html/index.html
 
+setup_codeberg:
+    ssh-keyscan -t ed25519 codeberg.org >> ~/.ssh/known_hosts
+
