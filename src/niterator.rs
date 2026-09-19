@@ -16,8 +16,8 @@
 //! ## Safety Warranties & Invariants
 //! Since these iterators operate internally with raw pointers, callers must strictly uphold
 //! the conditions outlined in the `# Safety` documentation. Internally, the remaining capacity
-//! is tracked via a numerical counter (`len`), making the iterators inherently safe against
-//! pointer overshooting and completely compatible with Zero-Sized Types (ZSTs).
+//! is tracked via a numerical counter (`len`). The raw-pointer constructors remain unsafe:
+//! callers are responsible for ensuring that every visited address is valid for the required access.
 
 use std::marker::PhantomData;
 
@@ -95,8 +95,8 @@ impl<'a, T> NIterator<'a, T> {
     ///
     /// # Safety
     /// - `ptr` must be valid for traversing `len` elements separated by `step` strides.
-    /// - The maximum offset reached (`ptr.add(len * step)`) must not exceed the bounds of the
-    ///   allocated object and must not wrap around the virtual address space.
+    /// - For every yielded element, the address at offset `index * step` must remain within the same
+    ///   allocation, be properly aligned for `T`, and point to a fully initialized `T`.
     #[inline(always)]
     pub const unsafe fn new_step(ptr: *const T, len: usize, step: usize) -> Self {
         Self {
@@ -130,9 +130,9 @@ impl<'a, T> NMutIterator<'a, T> {
     /// If a `step` of `0` is supplied, it automatically falls back to a safe step size of `1`.
     ///
     /// # Safety
-    /// - All security preconditions outlined in [`NIterator::new_step`] apply here identically.
-    /// - Additionally, total exclusivity must be guaranteed for all visited memory addresses. If `step`
-    ///   is chosen such that target slots could overlap, the caller must ensure this does not induce UB.
+    /// - Every visited address must remain within the same allocation, be properly aligned for `T`,
+    ///   and point to an initialized, writable `T` for lifetime `'a`.
+    /// - The visited elements must be exclusively accessible for lifetime `'a`.
     #[inline(always)]
     pub const unsafe fn new_step(ptr: *mut T, len: usize, step: usize) -> Self {
         Self {
@@ -143,47 +143,59 @@ impl<'a, T> NMutIterator<'a, T> {
         }
     }
 
-    /// Clones elements from a safe Rust slice directly into the memory slots targeted by this iterator.
+    /// Clones elements from `data` into the initialized elements targeted by this iterator.
     ///
-    /// This operation stops automatically when either the source slice (`data`) or the iterator
-    /// reaches its maximum capacity limits.
-    ///
-    /// # Architectural Optimization
-    /// - If `step == 1`, this operation compiles directly down to a fast `std::ptr::copy_nonoverlapping`
-    ///   (equivalent to `memcpy`).
-    /// - If `step > 1`, a register-optimized loop runs, utilizing raw `.write()` calls to place items without
-    ///   generating unstable or overlapping intermediate safe references.
-    /// - Zero-Sized Types (ZSTs) are instantly returned to prevent unnecessary operations or hardware panics.
+    /// Stops when either the source slice or the iterator is exhausted. Existing target
+    /// values are updated with `Clone::clone_from`, so their destructors and clone semantics
+    /// are preserved.
     #[inline(always)]
     pub fn clone_from_slice(&mut self, data: &[T])
     where
         T: Clone,
     {
-        if std::mem::size_of::<T>() == 0 || self.len == 0 {
+        let count = data.len().min(self.len);
+        let mut dst = self.ptr;
+
+        for src in data.iter().take(count) {
+            unsafe {
+                (&mut *dst).clone_from(src);
+                dst = dst.wrapping_offset(self.step);
+            }
+        }
+
+        self.ptr = dst;
+        self.len -= count;
+    }
+
+    /// Copies elements from `data` into the elements targeted by this iterator.
+    ///
+    /// For contiguous destinations this uses `copy_nonoverlapping`; strided destinations
+    /// are copied element by element. This method is restricted to `Copy` types.
+    #[inline(always)]
+    pub fn copy_from_slice(&mut self, data: &[T])
+    where
+        T: Copy,
+    {
+        let count = data.len().min(self.len);
+        if count == 0 {
             return;
         }
 
-        let count = data.len().min(self.len);
-        let stride = self.step;
-
         unsafe {
-            if stride == 1 {
+            if self.step == 1 {
                 std::ptr::copy_nonoverlapping(data.as_ptr(), self.ptr, count);
                 self.ptr = self.ptr.add(count);
-                self.len -= count;
             } else {
                 let mut dst = self.ptr;
-                let src = data.as_ptr();
-
-                for i in 0..count {
-                    let item_clone = (*src.add(i)).clone();
-                    dst.write(item_clone);
-                    dst = dst.offset(stride);
+                for src in data.iter().take(count) {
+                    dst.write(*src);
+                    dst = dst.wrapping_offset(self.step);
                 }
                 self.ptr = dst;
-                self.len -= count;
             }
         }
+
+        self.len -= count;
     }
 }
 

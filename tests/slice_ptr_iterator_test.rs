@@ -131,8 +131,8 @@ mod tests {
         // [2,3] → [12,13]
         // [3,4] → [13,14]
         //
-        // Final data:
-        // [11,12,13,14]
+        // Final data (middle elements are visited twice):
+        // [11,22,23,14]
 
         assert_eq!(data, [11, 22, 23, 14]);
     }

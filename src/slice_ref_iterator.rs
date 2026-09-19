@@ -60,6 +60,19 @@ unsafe impl<'a, T: Sync> Sync for SliceRefIterator<'a, T> {}
 
 /// A mutable window iterator over a slice.
 ///
+/// The borrow returned by `next` prevents advancing the iterator while that window
+/// is still in use:
+///
+/// ```compile_fail
+/// use lineariterator::slice_ref_iterator::{LendingIterator, SliceMutRefIterator};
+///
+/// let mut data = [1, 2, 3];
+/// let mut iter = SliceMutRefIterator::new(&mut data, 2);
+/// let first = iter.next().unwrap();
+/// let _second = iter.next().unwrap();
+/// first[0] = 10;
+/// ```
+///
 /// Consecutive windows may overlap when the step is smaller than the window width.
 /// Unlike a standard `Iterator`, this type implements [`LendingIterator`], tying each
 /// returned mutable window to the borrow of the iterator. The iterator therefore cannot

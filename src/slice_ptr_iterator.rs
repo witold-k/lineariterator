@@ -34,7 +34,7 @@ pub struct SlicePtrIterator<'a, T> {
     ptr: *const T,
     width: usize,
     step: usize,
-    windows_left: usize, // Hard-Optimization: Pre-calculated count removes branches from next()
+    windows_left: usize,
     _marker: PhantomData<&'a T>,
 }
 
@@ -69,7 +69,8 @@ impl<'a, T> SlicePtrIterator<'a, T> {
     /// Creates a new windows pointer iterator with a custom step size.
     ///
     /// # Safety
-    /// - `ptr` must point to a valid region. The final memory address calculated by the iterator must not overflow.
+    /// - `ptr` must refer to an allocation containing `len` initialized `T` values.
+    /// - Every yielded window must remain within that allocation and be properly aligned.
     #[inline(always)]
     pub const unsafe fn new_step(ptr: *const T, width: usize, len: usize, step: usize) -> Self {
         let actual_step = if step == 0 { 1 } else { step };
@@ -102,8 +103,10 @@ impl<'a, T> SliceMutPtrIterator<'a, T> {
     /// Creates a new mutable windows pointer iterator with a custom step size.
     ///
     /// # Safety
-    /// - If `step < width`, sequential mutable slice windows will overlap in memory. Callers must handle
-    ///   these raw pointers safely without turning them into simultaneous overlapping safe `&mut [T]` references.
+    /// - `ptr` must refer to an allocation containing `len` initialized, writable `T` values.
+    /// - The allocation must remain exclusively accessible for lifetime `'a`.
+    /// - If `step < width`, sequential windows overlap. The yielded raw pointers must not be converted
+    ///   into simultaneously live overlapping `&mut [T]` references.
     #[inline(always)]
     pub const unsafe fn new_step(ptr: *mut T, width: usize, len: usize, step: usize) -> Self {
         let actual_step = if step == 0 { 1 } else { step };
@@ -128,14 +131,12 @@ impl<'a, T> Iterator for SlicePtrIterator<'a, T> {
 
     #[inline(always)]
     fn next(&mut self) -> Option<Self::Item> {
-        // Zero branching cost: Check against integer zero instead of cross-boundary pointers
         if self.windows_left == 0 {
             None
         } else {
             let current = self.ptr;
             let slice_ptr = std::ptr::slice_from_raw_parts(current, self.width);
 
-            // Advance state with simple, pipeline-friendly register modifications
             self.ptr = self.ptr.wrapping_add(self.step);
             self.windows_left -= 1;
             Some(slice_ptr)

@@ -2,6 +2,8 @@
 // Copyright (c) 2026 Witold Kaminski
 
 use lineariterator::niterator::NMutIterator;
+use std::cell::Cell;
+use std::rc::Rc;
 
 /// Tests basic iteration of NMutIterator.
 ///
@@ -75,5 +77,76 @@ fn test_nmutiterator_zero_sized_type() {
 
     assert_eq!(iter.len(), 4);
     assert_eq!(iter.by_ref().count(), 4);
+    assert_eq!(iter.len(), 0);
+}
+
+
+#[derive(Debug)]
+struct CloneTracked {
+    value: String,
+    drops: Rc<Cell<usize>>,
+}
+
+impl Clone for CloneTracked {
+    fn clone(&self) -> Self {
+        Self {
+            value: self.value.clone(),
+            drops: Rc::clone(&self.drops),
+        }
+    }
+
+    fn clone_from(&mut self, source: &Self) {
+        self.value.clone_from(&source.value);
+        self.drops = Rc::clone(&source.drops);
+    }
+}
+
+impl Drop for CloneTracked {
+    fn drop(&mut self) {
+        self.drops.set(self.drops.get() + 1);
+    }
+}
+
+#[test]
+fn test_nmutiterator_clone_from_slice_non_copy_type() {
+    let drops = Rc::new(Cell::new(0));
+    let make = |value: &str| CloneTracked {
+        value: value.to_owned(),
+        drops: Rc::clone(&drops),
+    };
+
+    {
+        let source = [make("one"), make("two")];
+        let mut target = [make("old-a"), make("old-b")];
+        let mut iter = unsafe { NMutIterator::new(target.as_mut_ptr(), target.len()) };
+
+        iter.clone_from_slice(&source);
+
+        assert_eq!(target[0].value, "one");
+        assert_eq!(target[1].value, "two");
+    }
+
+    assert_eq!(drops.get(), 4);
+}
+
+#[test]
+fn test_nmutiterator_copy_from_slice_contiguous() {
+    let mut data = [0, 0, 0, 0];
+    let mut iter = unsafe { NMutIterator::new(data.as_mut_ptr(), data.len()) };
+
+    iter.copy_from_slice(&[1, 2, 3]);
+
+    assert_eq!(data, [1, 2, 3, 0]);
+    assert_eq!(iter.len(), 1);
+}
+
+#[test]
+fn test_nmutiterator_copy_from_slice_strided() {
+    let mut data = [0, 0, 0, 0, 0];
+    let mut iter = unsafe { NMutIterator::new_step(data.as_mut_ptr(), 3, 2) };
+
+    iter.copy_from_slice(&[1, 2, 3]);
+
+    assert_eq!(data, [1, 0, 2, 0, 3]);
     assert_eq!(iter.len(), 0);
 }
