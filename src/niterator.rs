@@ -63,7 +63,7 @@ unsafe impl<'a, T: Sync> Sync for NIterator<'a, T> {}
 /// values into the targeted non-contiguous slots.
 pub struct NMutIterator<'a, T> {
     ptr: *mut T,
-    step: isize,
+    step: usize,
     len: usize,
     _marker: PhantomData<&'a mut T>,
 }
@@ -136,7 +136,7 @@ impl<'a, T> NMutIterator<'a, T> {
     pub const unsafe fn new_step(ptr: *mut T, len: usize, step: usize) -> Self {
         Self {
             ptr,
-            step: if step == 0 { 1 } else { step as isize },
+            step: if step == 0 { 1 } else { step },
             len,
             _marker: PhantomData,
         }
