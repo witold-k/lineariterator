@@ -16,8 +16,8 @@
 //! ## Safety Warranties & Invariants
 //! Since these iterators operate internally with raw pointers, callers must strictly uphold
 //! the conditions outlined in the `# Safety` documentation. Internally, the remaining capacity
-//! is tracked via a numerical counter (`len`), making the iterators inherently safe against
-//! pointer overshooting and completely compatible with Zero-Sized Types (ZSTs).
+//! is tracked via a numerical counter (`len`). The raw-pointer constructors remain unsafe:
+//! callers are responsible for ensuring that every visited address is valid for the required access.
 
 use std::marker::PhantomData;
 
@@ -95,8 +95,8 @@ impl<'a, T> NIterator<'a, T> {
     ///
     /// # Safety
     /// - `ptr` must be valid for traversing `len` elements separated by `step` strides.
-    /// - The maximum offset reached (`ptr.add(len * step)`) must not exceed the bounds of the
-    ///   allocated object and must not wrap around the virtual address space.
+    /// - For every yielded element, the address at offset `index * step` must remain within the same
+    ///   allocation, be properly aligned for `T`, and point to a fully initialized `T`.
     #[inline(always)]
     pub const unsafe fn new_step(ptr: *const T, len: usize, step: usize) -> Self {
         Self {
@@ -130,9 +130,9 @@ impl<'a, T> NMutIterator<'a, T> {
     /// If a `step` of `0` is supplied, it automatically falls back to a safe step size of `1`.
     ///
     /// # Safety
-    /// - All security preconditions outlined in [`NIterator::new_step`] apply here identically.
-    /// - Additionally, total exclusivity must be guaranteed for all visited memory addresses. If `step`
-    ///   is chosen such that target slots could overlap, the caller must ensure this does not induce UB.
+    /// - Every visited address must remain within the same allocation, be properly aligned for `T`,
+    ///   and point to an initialized, writable `T` for lifetime `'a`.
+    /// - The visited elements must be exclusively accessible for lifetime `'a`.
     #[inline(always)]
     pub const unsafe fn new_step(ptr: *mut T, len: usize, step: usize) -> Self {
         Self {
