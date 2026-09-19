@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Witold Kaminski
 
-use lineariterator::niterator::NMutIterator;
+use lineariterator::niterator::{NIterator, NMutIterator};
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -149,4 +149,21 @@ fn test_nmutiterator_copy_from_slice_strided() {
 
     assert_eq!(data, [1, 0, 2, 0, 3]);
     assert_eq!(iter.len(), 0);
+}
+
+
+#[test]
+fn test_niterator_large_stride_with_zero_sized_type() {
+    let data = [(); 3];
+    let iter = unsafe { NIterator::new_step(data.as_ptr(), data.len(), usize::MAX) };
+
+    assert_eq!(iter.count(), 3);
+}
+
+#[test]
+fn test_nmutiterator_large_stride_with_zero_sized_type() {
+    let mut data = [(); 3];
+    let iter = unsafe { NMutIterator::new_step(data.as_mut_ptr(), data.len(), usize::MAX) };
+
+    assert_eq!(iter.count(), 3);
 }
