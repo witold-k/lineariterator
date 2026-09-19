@@ -3,7 +3,7 @@
 
 //! # Non-contiguous Memory Iterators (Stride Iterators)
 //!
-//! This module provides highly optimized, low-level memory iterators designed to traverse
+//! This module provides low-level memory iterators designed to traverse
 //! memory regions using fixed step sizes (strides). Unlike standard slice iterators,
 //! [`NIterator`] and [`NMutIterator`] allow skipping elements (e.g., accessing every 2nd or 3rd item).
 //!
@@ -11,7 +11,7 @@
 //! - **Graphics & Audio:** Processing interlaced image pixels (e.g., extracting only the red channel from an RGB buffer)
 //!   or handling interleaved audio channels.
 //! - **Numerical Computing & Matrices:** Efficiently traversing columns in a row-major matrix layout.
-//! - **Performance-Critical Code:** Minimizing branches by allowing LLVM to aggressively optimize loop structures.
+//! - **Explicit Memory Traversal:** Representing fixed-stride access patterns directly.
 //!
 //! ## Safety Warranties & Invariants
 //! Since these iterators operate internally with raw pointers, callers must strictly uphold
@@ -48,7 +48,7 @@ use std::marker::PhantomData;
 #[derive(Copy, Clone)]
 pub struct NIterator<'a, T> {
     ptr: *const T,
-    step: isize,
+    step: usize,
     len: usize,
     _marker: PhantomData<&'a T>,
 }
@@ -59,12 +59,11 @@ unsafe impl<'a, T: Sync> Sync for NIterator<'a, T> {}
 
 /// A mutable iterator over a memory region with a custom step size (stride).
 ///
-/// Yields raw pointers of type `*mut T`. It includes an optimized [`clone_from_slice`](Self::clone_from_slice)
-/// method to copy data rapidly into the target non-contiguous slots.
-#[derive(Copy, Clone)]
+/// Yields raw pointers of type `*mut T`. It also provides methods for cloning or copying
+/// values into the targeted non-contiguous slots.
 pub struct NMutIterator<'a, T> {
     ptr: *mut T,
-    step: isize,
+    step: usize,
     len: usize,
     _marker: PhantomData<&'a mut T>,
 }
@@ -101,7 +100,7 @@ impl<'a, T> NIterator<'a, T> {
     pub const unsafe fn new_step(ptr: *const T, len: usize, step: usize) -> Self {
         Self {
             ptr,
-            step: if step == 0 { 1 } else { step as isize },
+            step: if step == 0 { 1 } else { step },
             len,
             _marker: PhantomData,
         }
@@ -112,7 +111,7 @@ impl<'a, T> NMutIterator<'a, T> {
     /// Creates a new sequential mutable iterator (step size = 1).
     ///
     /// # Safety
-    /// - `ptr` must be uniquely valid, aligned, and writable for the entire duration of lifetime `'a`.
+    /// - `ptr` must point to `len` initialized, properly aligned, writable `T` values that remain valid for lifetime `'a`.
     /// - No other references or pointers may aliasingly read or write to this memory space concurrently
     ///   (upholding Rust's strict mutable exclusivity rules).
     #[inline(always)]
@@ -137,7 +136,7 @@ impl<'a, T> NMutIterator<'a, T> {
     pub const unsafe fn new_step(ptr: *mut T, len: usize, step: usize) -> Self {
         Self {
             ptr,
-            step: if step == 0 { 1 } else { step as isize },
+            step: if step == 0 { 1 } else { step },
             len,
             _marker: PhantomData,
         }
@@ -159,7 +158,7 @@ impl<'a, T> NMutIterator<'a, T> {
         for src in data.iter().take(count) {
             unsafe {
                 (&mut *dst).clone_from(src);
-                dst = dst.wrapping_offset(self.step);
+                dst = dst.wrapping_add(self.step);
             }
         }
 
@@ -189,7 +188,7 @@ impl<'a, T> NMutIterator<'a, T> {
                 let mut dst = self.ptr;
                 for src in data.iter().take(count) {
                     dst.write(*src);
-                    dst = dst.wrapping_offset(self.step);
+                    dst = dst.wrapping_add(self.step);
                 }
                 self.ptr = dst;
             }
@@ -208,7 +207,7 @@ impl<'a, T> Iterator for NIterator<'a, T> {
             None
         } else {
             let current = self.ptr;
-            self.ptr = self.ptr.wrapping_offset(self.step);
+            self.ptr = self.ptr.wrapping_add(self.step);
             self.len -= 1;
             Some(current)
         }
@@ -231,7 +230,7 @@ impl<'a, T> Iterator for NMutIterator<'a, T> {
             None
         } else {
             let current = self.ptr;
-            self.ptr = self.ptr.wrapping_offset(self.step);
+            self.ptr = self.ptr.wrapping_add(self.step);
             self.len -= 1;
             Some(current)
         }

@@ -17,7 +17,7 @@ use std::marker::PhantomData;
 ///         use my_crate::slice_ptr_iterator::SlicePtrIterator;
 ///
 ///         let data = [ 10, 20, 30, 40, 50 ];
-///         // width = 2, total len = 4. Yields:, then, then [30, 40]
+///         // width = 2 over the first 4 elements yields [10, 20], [20, 30], [30, 40]
 ///         let mut iter = SlicePtrIterator::new(data.as_ptr(), 2, 4);
 ///
 ///         let w1 = iter.next().unwrap();
@@ -44,7 +44,6 @@ unsafe impl<'a, T: Sync> Sync for SlicePtrIterator<'a, T> {}
 /// A mutable iterator that yields raw pointers to mutable slices of a specified width.
 ///
 /// Yields raw pointers of type `*mut [T]`.
-#[derive(Copy, Clone)]
 pub struct SliceMutPtrIterator<'a, T> {
     ptr: *mut T,
     width: usize,
