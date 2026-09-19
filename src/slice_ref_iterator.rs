@@ -131,10 +131,7 @@ impl<'a, T> Iterator for SliceRefIterator<'a, T> {
         let ptr_item = self.inner.next()?;
         // The pointer originates from the borrowed input slice and the inner iterator
         // only yields windows that fit within that slice.
-        unsafe {
-            core::hint::assert_unchecked(!ptr_item.is_null());
-            Some(&*ptr_item)
-        }
+        unsafe { Some(&*ptr_item) }
     }
 
     #[inline(always)]
@@ -181,10 +178,7 @@ impl<'a, T> LendingIterator for SliceMutRefIterator<'a, T> {
         // Safety: the returned reference is tied to the mutable borrow of self.
         // The iterator therefore cannot advance while that reference is in use,
         // even when consecutive windows overlap.
-        unsafe {
-            core::hint::assert_unchecked(!ptr_item.is_null());
-            Some(&mut *ptr_item)
-        }
+        unsafe { Some(&mut *ptr_item) }
     }
 }
 
