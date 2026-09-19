@@ -108,10 +108,7 @@ impl<'a, T> NIterator<'a, T> {
     }
 }
 
-impl<'a, T> NMutIterator<'a, T>
-where
-    T: Clone
-{
+impl<'a, T> NMutIterator<'a, T> {
     /// Creates a new sequential mutable iterator (step size = 1).
     ///
     /// # Safety
@@ -158,7 +155,10 @@ where
     ///   generating unstable or overlapping intermediate safe references.
     /// - Zero-Sized Types (ZSTs) are instantly returned to prevent unnecessary operations or hardware panics.
     #[inline(always)]
-    pub fn clone_from_slice(&mut self, data: &[T]) {
+    pub fn clone_from_slice(&mut self, data: &[T])
+    where
+        T: Clone,
+    {
         if std::mem::size_of::<T>() == 0 || self.len == 0 {
             return;
         }

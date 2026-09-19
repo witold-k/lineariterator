@@ -4,13 +4,28 @@
 //! # Module: Slice Reference Iterator
 //!
 //! ## Core Responsibility
-//! This module implements ultra-high performance iterators for borrowing windows/slices of a
-//! specified width from a given slice. It wraps pointer iterators directly to eliminate
-//! logical branch duplication and maximize LLVM register pinning.
+//! This module implements iterators for borrowing fixed-width windows from a slice.
+//! Immutable windows use the standard `Iterator` trait. Mutable windows use
+//! [`LendingIterator`] so overlapping windows can be exposed without allowing
+//! simultaneously live overlapping mutable references.
 
 use crate::slice_ptr_iterator::{SlicePtrIterator, SliceMutPtrIterator};
 use std::marker::PhantomData;
 use std::iter::FusedIterator;
+
+/// An iterator whose yielded item may borrow from the iterator itself.
+///
+/// Unlike `Iterator`, the lifetime of an item is tied to the mutable borrow
+/// used for the call to `LendingIterator::next`. This makes overlapping
+/// mutable windows safe: the current window must stop being used before the
+/// iterator can advance to the next one.
+pub trait LendingIterator {
+    type Item<'b>
+    where
+        Self: 'b;
+
+    fn next(&mut self) -> Option<Self::Item<'_>>;
+}
 
 /// An immutable iterator that yields references to slice windows.
 ///
@@ -45,10 +60,10 @@ unsafe impl<'a, T: Sync> Sync for SliceRefIterator<'a, T> {}
 
 /// A mutable window iterator over a slice.
 ///
-/// # Safety Warning
-/// Because this iterator can yield overlapping mutable windows when the step stride is smaller
-/// than the window width, consumers **must never** hold onto multiple returned mutable references
-/// at the same time. Each yielded element must go out of scope before `.next()` is called again.
+/// Consecutive windows may overlap when the step is smaller than the window width.
+/// Unlike a standard `Iterator`, this type implements [`LendingIterator`], tying each
+/// returned mutable window to the borrow of the iterator. The iterator therefore cannot
+/// advance while a previously yielded mutable window is still in use.
 ///
 /// # Example
 /// ```rust
@@ -56,7 +71,7 @@ unsafe impl<'a, T: Sync> Sync for SliceRefIterator<'a, T> {}
 /// impl MockRunner {
 ///     fn run() {
 ///         extern crate lineariterator as my_crate;
-///         use my_crate::slice_ref_iterator::SliceMutRefIterator;
+///         use my_crate::slice_ref_iterator::{LendingIterator, SliceMutRefIterator};
 ///
 ///         let mut data = [10, 20, 30, 40];
 ///         let mut iter = SliceMutRefIterator::new(&mut data, 2);
@@ -101,8 +116,8 @@ impl<'a, T> Iterator for SliceRefIterator<'a, T> {
     #[inline(always)]
     fn next(&mut self) -> Option<Self::Item> {
         let ptr_item = self.inner.next()?;
-        // Hard-Optimization: Hint to LLVM that the underlying pointer is guaranteed
-        // to be valid and properly aligned when the loop size hint is non-zero.
+        // The pointer originates from the borrowed input slice and the inner iterator
+        // only yields windows that fit within that slice.
         unsafe {
             core::hint::assert_unchecked(!ptr_item.is_null());
             Some(&*ptr_item)
@@ -142,30 +157,21 @@ impl<'a, T> SliceMutRefIterator<'a, T> {
     }
 }
 
-impl<'a, T> Iterator for SliceMutRefIterator<'a, T> {
-    type Item = &'a mut [T];
+impl<'a, T> LendingIterator for SliceMutRefIterator<'a, T> {
+    type Item<'b> = &'b mut [T]
+    where
+        Self: 'b;
 
     #[inline(always)]
-    fn next(&mut self) -> Option<Self::Item> {
+    fn next(&mut self) -> Option<Self::Item<'_>> {
         let ptr_item = self.inner.next()?;
-        // Hard-Optimization: Bypass safety boundary unwrap re-checks inside hot assembly loops.
+        // Safety: the returned reference is tied to the mutable borrow of self.
+        // The iterator therefore cannot advance while that reference is in use,
+        // even when consecutive windows overlap.
         unsafe {
             core::hint::assert_unchecked(!ptr_item.is_null());
             Some(&mut *ptr_item)
         }
     }
-
-    #[inline(always)]
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        self.inner.size_hint()
-    }
-
-    #[inline(always)]
-    fn count(self) -> usize {
-        self.inner.size_hint().0
-    }
 }
-
-impl<'a, T> ExactSizeIterator for SliceMutRefIterator<'a, T> {}
-impl<'a, T> FusedIterator for SliceMutRefIterator<'a, T> {}
 

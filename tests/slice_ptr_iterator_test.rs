@@ -137,5 +137,43 @@ mod tests {
         assert_eq!(data, [11, 22, 23, 14]);
     }
 
+
+    #[test]
+    fn test_custom_step() {
+        let data = [1, 2, 3, 4, 5, 6];
+        let iter = unsafe { SlicePtrIterator::new_step(data.as_ptr(), 2, data.len(), 2) };
+
+        let results: Vec<_> = iter
+            .map(|ptr| unsafe { (&*ptr).to_vec() })
+            .collect();
+
+        assert_eq!(results, vec![vec![1, 2], vec![3, 4], vec![5, 6]]);
+    }
+
+    #[test]
+    fn test_zero_step_falls_back_to_one() {
+        let data = [1, 2, 3];
+        let iter = unsafe { SlicePtrIterator::new_step(data.as_ptr(), 2, data.len(), 0) };
+
+        assert_eq!(iter.len(), 2);
+    }
+
+    #[test]
+    fn test_zero_width_is_empty() {
+        let data = [1, 2, 3];
+        let mut iter = unsafe { SlicePtrIterator::new(data.as_ptr(), 0, data.len()) };
+
+        assert_eq!(iter.len(), 0);
+        assert!(iter.next().is_none());
+    }
+
+    #[test]
+    fn test_zero_sized_type_windows() {
+        let data = [(); 4];
+        let iter = unsafe { SlicePtrIterator::new(data.as_ptr(), 2, data.len()) };
+
+        assert_eq!(iter.count(), 3);
+    }
+
 }
 

@@ -1,78 +1,39 @@
 # lineariterator
 
-Contiguous and non-contiguous memory layouts are iterated via hardware-optimized strides.
-Low-level raw pointer performance bridges directly into safe Rust abstractions.
-Zero runtime overhead and maximum LLVM auto-vectorization are guaranteed across all operations.
+Low-level Rust iterators for strided element traversal and fixed-width windows over contiguous memory.
 
-## Architectural Overview
+The crate provides both raw-pointer iterators and reference-based wrappers. It is intended for cases where traversal patterns such as strides or sliding windows need to be expressed explicitly and with minimal abstraction overhead.
 
-                      +------------------------+
-                      |     Standard Slice     |
-                      +-----------+------------+
-                                  |
-                  +---------------+---------------+
-                  |                               |
-                  v                               v
-      +-----------------------+       +-----------------------+
-      |      niterator        |       |  slice_ptr_iterator   |
-      |                       |       |                       |
-      |  - Stride / Step      |       |  - Fixed-width window |
-      |  - Points to T        |       |  - Points to [T]      |
-      +-----------------------+       +-----------+-----------+
-                                                  |
-                                                  | Wrapped by (Zero Cost)
-                                                  v
-                                      +-----------------------+
-                                      |  slice_ref_iterator   |
-                                      |                       |
-                                      |  - Yields &[T] / &mut |
-                                      +-----------------------+
+> **Status:** experimental. The raw-pointer APIs require the caller to uphold their documented safety invariants. Safe immutable windows use the standard `Iterator` trait; safe mutable overlapping windows use a small dependency-free lending iterator API.
 
-### 1. Zero-Branch Hot Paths (windows_left)
-Memory address limits are traditionally compared at runtime via (self.ptr >= self.end). This mechanism forces defensive compiler boundaries and hurts hardware pipeline prediction layout states.
-Total iteration capacity is calculated exactly once during constructor initialization phase blocks. The hot path loop (next()) checks against an integer zero (windows_left == 0). Branching stalls collapse into single-cycle pipeline-friendly decrements.
+## Features
 
-### 2. Strict Logic Isolation
-Traversal mechanics live exclusively in raw pointer structures (slice_ptr_iterator). Index offsets, custom strides, and size calculations are centralized here. Safe reference wrappers (slice_ref_iterator) compose these pointer structures as inner elements. Raw types convert into native references at zero runtime cost.
+- strided traversal over elements
+- immutable and mutable raw-pointer iterators
+- fixed-width sliding windows with configurable step size
+- immutable reference windows over safe Rust slices
+- mutable overlapping reference windows through a GAT-based lending iterator
+- exact-size iteration for the standard iterator types
+- no external runtime dependencies
 
-### 3. LLVM Register Pinning and ZST Proofing
-* Unchecked Asserts: The reference wrappers utilize core::hint::assert_unchecked internally. This informs LLVM that inner pointer addresses cannot evaluate to null. Redundant fallback branches are completely stripped from compiled assembly.
-* Zero-Sized Types: Iteration states are tracked via numerical counts rather than absolute addresses. Types with a size of zero (such as ()) iterate correctly without triggering infinite loop traps.
+## Modules
 
----
+### `niterator`
 
-## Module Breakdown and Documentation
+Strided traversal over individual elements.
 
-### 1. niterator - Non-contiguous Stride Traversal
-Multidimensional arrays, interlaced audio channels, and matrix layouts use this module. It allows moving through element blocks with customized step sizes.
+- `NIterator<'a, T>` yields `*const T`
+- `NMutIterator<'a, T>` yields `*mut T`
+- `NMutIterator::clone_from_slice()` copies values into strided destinations
 
-* NIterator<'a, T>: Yields raw immutable element pointers (*const T).
-* NMutIterator<'a, T>: Yields raw mutable element pointers (*mut T). Includes a fast .clone_from_slice(&[T]) routine which uses sequential memcpy when step == 1.
+Example:
 
-### 2. slice_ptr_iterator - Low-Level Pointer Windows
-Chunked slice pointers are yielded from an allocated block without safe conversions.
-
-* SlicePtrIterator<'a, T>: Yields raw slice layout pointers (*const [T]).
-* SliceMutPtrIterator<'a, T>: Yields mutable raw slice layout pointers (*mut [T]).
-
-### 3. slice_ref_iterator - Safe Reference Windows
-Underlying slice_ptr_iterator elements are wrapped at zero runtime compilation cost.
-
-* SliceRefIterator<'a, T>: Yields safe immutable slice segments (&'a [T]).
-* SliceMutRefIterator<'a, T>: Yields safe disjoint mutable slice segments (&'a mut [T]).
-
----
-
-## Usage Examples
-
-### Stride Iteration (niterator)
 ```rust
 use lineariterator::niterator::NIterator;
 
 let data = [10, 20, 30, 40, 50];
 
 unsafe {
-    // Read 3 elements, skipping every second element (stride step = 2)
     let mut iter = NIterator::new_step(data.as_ptr(), 3, 2);
 
     assert_eq!(*iter.next().unwrap(), 10);
@@ -82,47 +43,110 @@ unsafe {
 }
 ```
 
-### Sliding Reference Windows (slice_ref_iterator)
+### `slice_ptr_iterator`
+
+Low-level fixed-width window iteration using raw slice pointers.
+
+- `SlicePtrIterator<'a, T>` yields `*const [T]`
+- `SliceMutPtrIterator<'a, T>` yields `*mut [T]`
+- configurable window width and step size
+
+Example:
+
+```rust
+use lineariterator::slice_ptr_iterator::SlicePtrIterator;
+
+let data = [1, 2, 3, 4, 5];
+
+unsafe {
+    let mut iter = SlicePtrIterator::new(data.as_ptr(), 3, data.len());
+
+    assert_eq!(&*iter.next().unwrap(), &[1, 2, 3]);
+    assert_eq!(&*iter.next().unwrap(), &[2, 3, 4]);
+    assert_eq!(&*iter.next().unwrap(), &[3, 4, 5]);
+    assert!(iter.next().is_none());
+}
+```
+
+### `slice_ref_iterator`
+
+Reference-based wrappers around the pointer-window iterator.
+
+- `SliceRefIterator<'a, T>` yields immutable slice windows
+- `SliceMutRefIterator<'a, T>` yields mutable windows through `LendingIterator`; each window borrows the iterator, preventing simultaneous overlapping `&mut` references
+
+Immutable example:
+
 ```rust
 use lineariterator::slice_ref_iterator::SliceRefIterator;
 
 let data = [10, 20, 30, 40, 50];
-// Window width = 2, Step stride = 1
-let mut iter = SliceRefIterator::new(&data, 2);
+let windows: Vec<_> = SliceRefIterator::new(&data, 2).collect();
 
-assert_eq!(iter.next().unwrap(), &[10, 20]);
-assert_eq!(iter.next().unwrap(), &[20, 30]);
-assert_eq!(iter.next().unwrap(), &[30, 40]);
-assert_eq!(iter.next().unwrap(), &[40, 50]);
-assert!(iter.next().is_none());
+assert_eq!(windows[0], &[10, 20]);
+assert_eq!(windows[1], &[20, 30]);
+assert_eq!(windows[2], &[30, 40]);
+assert_eq!(windows[3], &[40, 50]);
 ```
 
----
+Mutable overlapping windows use the lending API:
 
-## Critical Safety Invariants
+```rust
+use lineariterator::slice_ref_iterator::{LendingIterator, SliceMutRefIterator};
 
-Crate mechanics work directly at the raw metal layer of memory. These invariants must be respected to guarantee safe execution paths:
+let mut data = [1, 2, 3, 4];
+let mut windows = SliceMutRefIterator::new(&mut data, 2);
 
-### Mutable Overlapping Overrides
-Ensure your step stride size matches or exceeds window width (step >= width) when initializing custom configurations (new_step) under SliceMutRefIterator.
+while let Some(window) = windows.next() {
+    window[0] += 10;
+}
 
-Consecutive elements will overlap in memory if step < width (such as the default sliding setup inside SliceMutRefIterator::new which defaults to step = 1).
-* The Rule: The yielded mutable reference must be completely dropped before calling .next() again.
-* The Violation: Storing multiple overlapping mutable windows concurrently violates Rust's mutable exclusivity law, causing instant Undefined Behavior (UB).
-
----
-
-## Performance Profiling
-
-ExactSizeIterator and FusedIterator traits are implemented natively across all types. Methods like .count() or .size_hint() run at constant O(1) time complexity.
-Sequential element loop evaluation is skipped completely.
-
-Benchmark against the standard library via:
-```bash
-cargo bench
+assert_eq!(data, [11, 12, 13, 4]);
 ```
 
-Execute structural memory validation tests via:
+## Safety
+
+The raw-pointer iterators are intentionally low-level. Their constructors are `unsafe` because the caller must guarantee that all addresses visited by the iterator are valid for the required access and remain valid for the iterator's lifetime.
+
+Special care is required when using the raw mutable pointer iterators:
+
+- aliased mutable access must not be created
+- pointer arithmetic must remain within the allocation
+- all yielded pointers must only be dereferenced while valid
+- overlapping mutable windows must never be converted into simultaneously live mutable references
+
+`SliceMutRefIterator` keeps overlapping mutable windows safe by implementing `LendingIterator` rather than `Iterator`. The lifetime of each returned `&mut [T]` is tied to the borrow of the iterator, so the iterator cannot advance while that window is still in use.
+
+## Testing
+
+Run the test suite with:
+
 ```bash
 cargo test
 ```
+
+Run Clippy with warnings denied:
+
+```bash
+cargo clippy -- -D warnings
+```
+
+Or use the project helper:
+
+```bash
+just build
+```
+
+## Design goals
+
+- explicit traversal semantics
+- small implementation
+- predictable iterator state
+- minimal dependencies
+- clear separation between raw-pointer primitives and safe wrappers
+- safety contracts documented at every unsafe boundary
+- consistent test layout: tests live under `tests/`, mirror the relative `src/` hierarchy where relevant, and use the source filename with a `_test.rs` suffix
+
+## License
+
+Apache-2.0
