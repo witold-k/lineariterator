@@ -24,7 +24,8 @@ Strided traversal over individual elements.
 
 - `NIterator<'a, T>` yields `*const T`
 - `NMutIterator<'a, T>` yields `*mut T`
-- `NMutIterator::clone_from_slice()` copies values into strided destinations
+- `NMutIterator::clone_from_slice()` clones values into initialized strided destinations
+- `NMutIterator::copy_from_slice()` provides a `Copy`-only fast path
 
 Example:
 
